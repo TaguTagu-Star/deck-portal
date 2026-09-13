@@ -61,10 +61,12 @@ Supabaseの「Branching」機能（契約プランにより利用可否が異な
 - 既存のenum的なCHECK制約（`card_type`、`visibility`等）に値を追加する場合も、必ず新規migrationファイルで`ALTER TABLE ... DROP CONSTRAINT ... ADD CONSTRAINT ...`を発行し、直接ダッシュボードから変更しない。
 - CIで「schemas/repositories変更時にmigrationファイルが伴っているか」を警告として検知する（第3章参照。完全な強制ではなくレビュー時の気づきを目的とする）。
 - **migrationの反映はGitHub Actionsで自動化する**（ローカルCLIからの手動pushは開発時の動作確認用途に限定し、staging/productionへの正式な反映はCI経由に統一する）。
-  - `develop`へのpush → `.github/workflows/deploy-migrations-staging.yml`が自動実行され、staging用Supabaseプロジェクトへ`supabase db push`
-  - `main`へのpush → `.github/workflows/deploy-migrations-production.yml`が自動実行され、production用Supabaseプロジェクトへ`supabase db push`
-  - どちらもリポジトリのGitHub Secretsに設定した`SUPABASE_ACCESS_TOKEN`・`{STAGING,PRODUCTION}_DB_PASSWORD`・`{STAGING,PRODUCTION}_PROJECT_ID`を使用し、非対話モードで実行される（`workflow_dispatch`での手動再実行も可能）。
+  - `develop`へのpush → `.github/workflows/deploy-migrations-staging.yml`が自動実行され、staging用SupabaseプロジェクトへDB接続文字列（`--db-url`）を使って`supabase db push`
+  - `main`へのpush → `.github/workflows/deploy-migrations-production.yml`が自動実行され、production用Supabaseプロジェクトへ同様に`supabase db push`
+  - CI側では`supabase link`やアクセストークンは使わない。`db push`はPostgresへの直接接続（DB接続文字列＝パスワード）で認証するため、Management API向けのアクセストークンをCIに持たせる必要がなく、Secretを`{STAGING,PRODUCTION}_DB_URL`の2つに絞れる（第6章参照）
+  - どちらも`workflow_dispatch`での手動再実行が可能
 - ローカルCLIの`supabase link`は同時に1プロジェクトとしかリンクできない点に注意する。ローカルで動作確認する場合は都度`supabase link --project-ref <ref>`でリンク先を切り替える。`supabase projects list`で現在のリンク先を確認できる。**本番プロジェクトへのローカルからの直接pushは事故防止のため原則行わない。**
+- ローカルでの`supabase login`は個人のアクセストークンを発行して行う。ブラウザが自動起動しない環境（WSL・SSH先・コンテナ等）では`supabase login --token <アクセストークン>`でブラウザを介さずにログインできる（`docs/setup-guide.md`参照）。この個人トークンはCIには使わない（CIは`--db-url`方式のためアクセストークン自体が不要）。
 - 初期スキーマ（`20260913000000_init_schema.sql`）およびRLSベースライン（`20260913000001_rls_policies.sql`）は本フェーズ0で作成済み。RLSポリシーはフェーズ5（デッキ共有）実装時に詳細レビューを行うこと（`docs/project_plan_final.md`第9章「RLS設計の複雑化」リスク参照）。
 
 ## 6. シークレット管理
@@ -76,13 +78,12 @@ Supabaseの「Branching」機能（契約プランにより利用可否が異な
 
 | Secret名 | 用途 |
 |---|---|
-| `SUPABASE_ACCESS_TOKEN` | Supabaseダッシュボード → Account → Access Tokens で発行した個人アクセストークン（staging/production共通） |
-| `STAGING_PROJECT_ID` | staging用Supabaseプロジェクトのref |
-| `STAGING_DB_PASSWORD` | staging用SupabaseプロジェクトのDBパスワード |
-| `PRODUCTION_PROJECT_ID` | production用Supabaseプロジェクトのref |
-| `PRODUCTION_DB_PASSWORD` | production用SupabaseプロジェクトのDBパスワード |
+| `STAGING_DB_URL` | staging用SupabaseプロジェクトのDB接続文字列（`postgresql://postgres:[PASSWORD]@db.<ref>.supabase.co:5432/postgres`。Project Settings → Database → Connection stringから取得） |
+| `PRODUCTION_DB_URL` | production用SupabaseプロジェクトのDB接続文字列（同上） |
 
-これらはCIログに出力されないようGitHub Secretsとして管理し、ワークフローファイル内にハードコードしない。
+これらはCIログに出力されないようGitHub Secretsとして管理し、ワークフローファイル内にハードコードしない。`db push`はこの接続文字列（＝DBパスワード）で直接Postgresに認証するため、**このSecretの管理がmigrationデプロイにおける実質的なセキュリティ境界**になる。アクセストークンの権限（Permission）をどう絞るかより、このDB接続文字列の漏洩防止の方が重要度が高い。
+
+- Supabaseの個人アクセストークン（`supabase login`で使うもの）は、CIには使用しない。開発者がローカルCLIで`link`・`projects list`等のManagement API系コマンドを使う際にのみ必要。ブラウザが自動起動しない環境では`supabase login --token <アクセストークン>`を使う（`docs/setup-guide.md`参照）。Scoped Personal Access Tokenが選択できる場合は、対象プロジェクトと必要な権限（主に「Database」）だけに絞って発行する。
 
 ## 7. リリース・変更管理
 

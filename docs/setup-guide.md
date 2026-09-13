@@ -44,7 +44,15 @@ npm install
 npx supabase login
 ```
 
-`login`は**マシン単位で1回だけ**でよく、プロジェクトごとに行う必要はない。
+`login`は**マシン単位で1回だけ**でよく、プロジェクトごとに行う必要はない。またproduction/staging特定のプロジェクトへのログインという意味ではなく、Supabaseアカウントそのものへの認証である。
+
+WSL・SSH接続先・コンテナ内などブラウザが自動起動しない環境では、以下のようにアクセストークンを使って直接ログインする。
+
+```bash
+npx supabase login --token <アクセストークン>
+```
+
+アクセストークンはSupabaseダッシュボード → Account → Access Tokens で発行する。Scoped Personal Access Token（権限を絞ったトークン）が選択できる場合は、ログイン用途であれば対象プロジェクトと「Database」権限程度に絞って問題ない。このトークンはCIには使わない（CIのmigrationデプロイは3.3のとおりDB接続文字列を使うため、アクセストークン自体が不要）。
 
 ### 3.2 ローカルCLIからのmigration適用（動作確認用）
 
@@ -73,11 +81,12 @@ npx supabase db push
 
 | Secret名 | 値の取得元 |
 |---|---|
-| `SUPABASE_ACCESS_TOKEN` | Supabaseダッシュボード → Account → Access Tokens で発行 |
-| `STAGING_PROJECT_ID` | staging用プロジェクトのref |
-| `STAGING_DB_PASSWORD` | staging用プロジェクトのDBパスワード（Project Settings → Database） |
-| `PRODUCTION_PROJECT_ID` | production用プロジェクトのref |
-| `PRODUCTION_DB_PASSWORD` | production用プロジェクトのDBパスワード |
+| `STAGING_DB_URL` | staging用プロジェクトのDB接続文字列 |
+| `PRODUCTION_DB_URL` | production用プロジェクトの同上 |
+
+**取得方法**：対象プロジェクトのダッシュボードでプロジェクト名の隣にある「Connect」ボタンをクリックし、「URI」タブで**「Session pooler」**を選択してコピーする（「Direct connection」はデフォルトでIPv6専用のため、GitHub Actionsのランナーから接続できないことが多い。「Transaction pooler」はDDL/migrationとの相性が悪い場合があるため避ける）。コピーした文字列内の`[YOUR-PASSWORD]`部分を実際のDBパスワードに置き換える。パスワードを忘れた場合は「Project Settings → Database → Reset database password」から再発行できる。パスワードに`@` `#` `?`等の記号が含まれる場合はパーセントエンコードが必要な点に注意する。
+
+CIの`db push`はこの接続文字列で直接Postgresに認証するため、アクセストークンやproject refをCIに渡す必要はない。
 
 設定後、`develop`ブランチへのpushで`.github/workflows/deploy-migrations-staging.yml`が、`main`ブランチへのpushで`.github/workflows/deploy-migrations-production.yml`がそれぞれ自動実行され、対応するSupabaseプロジェクトへmigrationが適用される。
 
