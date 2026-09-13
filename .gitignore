@@ -22,8 +22,9 @@ yarn-error.log*
 .env.local
 .env.*.local
 
-# supabase
-.supabase/
+# supabase（linkしたプロジェクト参照などのローカル状態。config.tomlはコミットする）
+supabase/.temp/
+supabase/.branches/
 
 # testing
 /coverage

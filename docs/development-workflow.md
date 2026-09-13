@@ -7,22 +7,25 @@
 
 ## 1. ブランチ戦略
 
-トランクベース＋短命フィーチャーブランチを採用する。
+`main`（本番）と`develop`（staging）の2つの長期ブランチを軸に、短命フィーチャーブランチで作業する。
 
-- `main`：常にデプロイ可能な状態を保つ。直接pushは禁止し、PR経由でのみマージする。
-- `feature/xxx`：フェーズ・機能単位で作成する（例：`feature/deck-edit-validation`）。
-- PRを`main`にマージする前に、CI（第3章）が全てグリーンであることを必須化する（GitHub側のブランチ保護ルールで強制する）。
+- `develop`：staging環境に対応する統合ブランチ。常にstagingへデプロイ可能な状態を保つ。
+- `main`：production環境に対応する。常に本番デプロイ可能な状態を保つ。直接pushは禁止し、`develop`からのPR経由でのみマージする。
+- `feature/xxx`：フェーズ・機能単位で`develop`から作成する（例：`feature/deck-edit-validation`）。作業後は`develop`へPRを出す。
+- `develop`へのマージ後、動作確認が取れたら`develop`→`main`のPRを作成し、本番へ反映する。
+- いずれのPRも、マージ前にCI（第3章）が全てグリーンであることを必須化する（GitHub側のブランチ保護ルールで`main`・`develop`双方に設定する）。
 - PRテンプレート（`.github/PULL_REQUEST_TEMPLATE.md`）のチェックリストで、プロジェクトルール（docs更新・テスト追加・migration追加・any禁止・サーバー専用キーの非公開・repository層集約）を毎回確認する。
 
 ## 2. 環境分離
 
-| 環境 | 用途 | Supabase | Vercel |
-|---|---|---|---|
-| Local | 開発者ローカル | Supabase CLIのローカルスタック（`supabase start`） | `next dev` |
-| Preview | PRごとの動作確認 | staging用Supabaseプロジェクト（またはSupabase Branching機能が利用可能ならPRごとのDBブランチ） | PRごとの自動プレビューデプロイ |
-| Production | 本番 | 本番用Supabaseプロジェクト（Previewとは別プロジェクト） | `main`マージ時に自動デプロイ |
+| 環境 | 対応ブランチ | 用途 | Supabase | Vercel |
+|---|---|---|---|---|
+| Local | feature/xxx | 開発者ローカル | Supabase CLIのローカルスタック（`supabase start`） | `next dev` |
+| Preview | feature/xxx → develop/main へのPR | PRごとの動作確認 | 基本的にstaging用Supabaseプロジェクトに接続（DBへの書き込みを伴う確認はstaging環境で行う） | PRごとの自動プレビューデプロイ |
+| Staging | develop | 結合確認用の常設環境 | staging用Supabaseプロジェクト。`develop`へのpushで`.github/workflows/deploy-migrations-staging.yml`が自動でmigrationを適用 | Vercel側で`develop`ブランチに常設のプレビューURL（サブドメイン）を割り当てる |
+| Production | main | 本番 | production用Supabaseプロジェクト（stagingとは別プロジェクト）。`main`へのpushで`.github/workflows/deploy-migrations-production.yml`が自動でmigrationを適用 | `main`マージ時に自動デプロイ |
 
-Supabaseの「Branching」機能（契約プランにより利用可否が異なる）が使える場合は、PRごとに一時DBブランチを発行し、プレビュー環境とDBの整合を取りやすくする。使えない場合は、共有のstagingプロジェクトに対してマイグレーションを都度適用する運用にする。
+Supabaseの「Branching」機能（契約プランにより利用可否が異なる）が使える場合は、PRごとに一時DBブランチを発行し、プレビュー環境とDBの整合を取りやすくする。使えない場合は、上記のとおりstaging用Supabaseプロジェクトを共有で使う。
 
 ## 3. CI（GitHub Actions）
 
@@ -57,7 +60,11 @@ Supabaseの「Branching」機能（契約プランにより利用可否が異な
 - スキーマ変更は必ず`supabase/migrations/`にSQLファイルとして追加する（`supabase migration new <name>`で生成し、命名は`YYYYMMDDHHMMSS_description.sql`）。
 - 既存のenum的なCHECK制約（`card_type`、`visibility`等）に値を追加する場合も、必ず新規migrationファイルで`ALTER TABLE ... DROP CONSTRAINT ... ADD CONSTRAINT ...`を発行し、直接ダッシュボードから変更しない。
 - CIで「schemas/repositories変更時にmigrationファイルが伴っているか」を警告として検知する（第3章参照。完全な強制ではなくレビュー時の気づきを目的とする）。
-- 本番反映は`main`マージ後、デプロイパイプライン（またはSupabase CLIの手動実行）で`supabase db push`を実行する。当面は人間が手動実行し、フェーズが進んだ段階で自動化を検討する。
+- **migrationの反映はGitHub Actionsで自動化する**（ローカルCLIからの手動pushは開発時の動作確認用途に限定し、staging/productionへの正式な反映はCI経由に統一する）。
+  - `develop`へのpush → `.github/workflows/deploy-migrations-staging.yml`が自動実行され、staging用Supabaseプロジェクトへ`supabase db push`
+  - `main`へのpush → `.github/workflows/deploy-migrations-production.yml`が自動実行され、production用Supabaseプロジェクトへ`supabase db push`
+  - どちらもリポジトリのGitHub Secretsに設定した`SUPABASE_ACCESS_TOKEN`・`{STAGING,PRODUCTION}_DB_PASSWORD`・`{STAGING,PRODUCTION}_PROJECT_ID`を使用し、非対話モードで実行される（`workflow_dispatch`での手動再実行も可能）。
+- ローカルCLIの`supabase link`は同時に1プロジェクトとしかリンクできない点に注意する。ローカルで動作確認する場合は都度`supabase link --project-ref <ref>`でリンク先を切り替える。`supabase projects list`で現在のリンク先を確認できる。**本番プロジェクトへのローカルからの直接pushは事故防止のため原則行わない。**
 - 初期スキーマ（`20260913000000_init_schema.sql`）およびRLSベースライン（`20260913000001_rls_policies.sql`）は本フェーズ0で作成済み。RLSポリシーはフェーズ5（デッキ共有）実装時に詳細レビューを行うこと（`docs/project_plan_final.md`第9章「RLS設計の複雑化」リスク参照）。
 
 ## 6. シークレット管理
@@ -65,6 +72,17 @@ Supabaseの「Branching」機能（契約プランにより利用可否が異な
 - Supabaseの Service Role Key は `src/lib/supabase/server.ts` からのみ参照し、Vercelのサーバー側環境変数にのみ設定する。`NEXT_PUBLIC_`プレフィックスを絶対に付けない。
 - `.env.local`は`.gitignore`対象。`.env.example`のみをリポジトリにコミットする。
 - CIにGitleaksを組み込み、誤って秘密情報がコミットされた場合に検知する。
+- migrationデプロイ用のGitHub Secrets（リポジトリの Settings → Secrets and variables → Actions で設定）：
+
+| Secret名 | 用途 |
+|---|---|
+| `SUPABASE_ACCESS_TOKEN` | Supabaseダッシュボード → Account → Access Tokens で発行した個人アクセストークン（staging/production共通） |
+| `STAGING_PROJECT_ID` | staging用Supabaseプロジェクトのref |
+| `STAGING_DB_PASSWORD` | staging用SupabaseプロジェクトのDBパスワード |
+| `PRODUCTION_PROJECT_ID` | production用Supabaseプロジェクトのref |
+| `PRODUCTION_DB_PASSWORD` | production用SupabaseプロジェクトのDBパスワード |
+
+これらはCIログに出力されないようGitHub Secretsとして管理し、ワークフローファイル内にハードコードしない。
 
 ## 7. リリース・変更管理
 
